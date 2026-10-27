@@ -1,0 +1,10 @@
+static const char coordinate_label[]="EAGL -- Duplicate coordinate buffer";
+static const char normal_label[]="EAGL -- Duplicate coordinate/normals buffer";
+static const char streams_label[]="EAGL::VertexBufferType new[]";
+static const char streams_expression[]="Streams";
+static const char method_filename[]="rendermethod.cpp";
+static const char jump_label[]="EAGLInternal::JumpTableEntry new[]";
+static const char skinned_label[]="EAGL::SkinnedVertexBuffer new";
+static const char descriptor_label[]="EAGL::SkinnedVertexBufferDescriptor new[]";
+static const char technique_filename[]="ettobject.cpp";
+static const char invalid_expression[]="0";

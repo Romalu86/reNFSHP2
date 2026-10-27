@@ -1,0 +1,299 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <UsingTask TaskName="NfsResolveBuildWorkers" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs">using System;
+using System.Runtime.InteropServices;
+using Microsoft.Build.Framework;
+
+public sealed class NfsResolveBuildWorkers : Microsoft.Build.Utilities.Task
+{
+    public string Requested { get; set; }
+    [Output] public int Workers { get; set; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatus
+    {
+        public uint Length;
+        public uint MemoryLoad;
+        public ulong TotalPhysical;
+        public ulong AvailablePhysical;
+        public ulong TotalPageFile;
+        public ulong AvailablePageFile;
+        public ulong TotalVirtual;
+        public ulong AvailableVirtual;
+        public ulong AvailableExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatus status);
+
+    public override bool Execute()
+    {
+        int requested;
+        if (String.IsNullOrWhiteSpace(Requested))
+            requested = 0;
+        else if (!Int32.TryParse(Requested, out requested) || requested &lt; 0 || requested &gt; 256)
+        {
+            Log.LogError("NfsBuildJobs must be 0 (automatic) or an integer from 1 to 256.");
+            return false;
+        }
+        if (requested &gt; 0)
+        {
+            Workers = requested;
+            return true;
+        }
+        Workers = Math.Max(1, Math.Min(32, Environment.ProcessorCount));
+        if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+        {
+            var status = new MemoryStatus();
+            status.Length = (uint)Marshal.SizeOf(typeof(MemoryStatus));
+            if (GlobalMemoryStatusEx(ref status))
+            {
+                // Reserve 2 GiB for the host and at least 1 GiB per compiler.
+                ulong gigabyte = 1024UL * 1024UL * 1024UL;
+                ulong memoryWorkers = status.TotalPhysical &gt; 2UL * gigabyte
+                    ? (status.TotalPhysical - 2UL * gigabyte) / gigabyte : 1UL;
+                Workers = Math.Min(Workers, (int)Math.Max(1UL, Math.Min(256UL, memoryWorkers)));
+            }
+        }
+        return true;
+    }
+}
+</Code>
+    </Task>
+  </UsingTask>
+  <UsingTask TaskName="NfsVerifyLegacyCpu" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs">
+using System;
+using System.IO;
+using System.Text;
+using Microsoft.Build.Framework;
+
+public sealed class NfsVerifyLegacyCpu : Microsoft.Build.Utilities.Task
+{
+    [Required] public string ObjectFile { get; set; }
+    private byte[] data;
+    private long symbolTable;
+    private long symbolCount;
+    private long stringTable;
+    private long stringBytes;
+
+    private void Range(long offset, long count)
+    {
+        if (offset &lt; 0 || count &lt; 0 || offset &gt; data.LongLength || count &gt; data.LongLength - offset)
+            throw new InvalidDataException("Truncated or invalid COFF range at " + offset + " (" + count + " bytes).");
+    }
+    private byte U8(long offset)
+    {
+        Range(offset, 1);
+        return data[(int)offset];
+    }
+    private ushort U16(long offset)
+    {
+        Range(offset, 2);
+        return (ushort)(data[(int)offset] | (data[(int)offset + 1] &lt;&lt; 8));
+    }
+    private uint U32(long offset)
+    {
+        Range(offset, 4);
+        return (uint)data[(int)offset] | ((uint)data[(int)offset + 1] &lt;&lt; 8) |
+               ((uint)data[(int)offset + 2] &lt;&lt; 16) | ((uint)data[(int)offset + 3] &lt;&lt; 24);
+    }
+    private static byte[] Hex(string text)
+    {
+        var bytes = new byte[text.Length / 2];
+        for (int index = 0; index &lt; bytes.Length; ++index)
+            bytes[index] = Convert.ToByte(text.Substring(index * 2, 2), 16);
+        return bytes;
+    }
+    private bool EqualsBytes(long offset, long size, byte[] expected)
+    {
+        Range(offset, size);
+        if (size != expected.Length)
+            return false;
+        for (int index = 0; index &lt; expected.Length; ++index)
+            if (data[(int)offset + index] != expected[index])
+                return false;
+        return true;
+    }
+    private string SymbolName(long index)
+    {
+        if (index &lt; 0 || index &gt;= symbolCount)
+            throw new InvalidDataException("Invalid COFF relocation symbol index.");
+        long offset = symbolTable + index * 18;
+        Range(offset, 18);
+        int limit;
+        bool longName = U32(offset) == 0;
+        if (longName)
+        {
+            long relative = U32(offset + 4);
+            if (relative &lt; 4 || relative &gt;= stringBytes)
+                throw new InvalidDataException("Invalid COFF string-table offset.");
+            offset = stringTable + relative;
+            limit = (int)Math.Min(256L, stringBytes - relative);
+        }
+        else
+            limit = 8;
+        var name = new StringBuilder();
+        for (int indexInName = 0; indexInName &lt; limit; ++indexInName)
+        {
+            byte character = U8(offset + indexInName);
+            if (character == 0)
+                return name.ToString();
+            name.Append((char)character);
+        }
+        if (longName)
+            throw new InvalidDataException("Unterminated or oversized COFF symbol name.");
+        return name.ToString();
+    }
+
+    public override bool Execute()
+    {
+        try
+        {
+            // Parse bytes only. The object is never loaded or executed.
+            data = File.ReadAllBytes(ObjectFile);
+            Range(0, 20);
+            ushort machine = U16(0);
+            ushort sections = U16(2);
+            symbolTable = U32(8);
+            symbolCount = U32(12);
+            ushort optionalHeader = U16(16);
+            if (machine != 332 || optionalHeader != 0 || sections &gt; 64)
+                throw new InvalidDataException("Unexpected legacy CPU object format (requires ordinary i386 COFF).");
+            Range(20, (long)sections * 40);
+            Range(symbolTable, symbolCount * 18);
+            stringTable = symbolTable + symbolCount * 18;
+            stringBytes = U32(stringTable);
+            if (stringBytes &lt; 4)
+                throw new InvalidDataException("Invalid COFF string-table size.");
+            Range(stringTable, stringBytes);
+
+            byte[] textName = Encoding.ASCII.GetBytes(".text\0\0\0");
+            byte[] preparation = Hex("9c58252af7ffff509dc3");
+            byte[] probe = Hex("5350c644240205c6442401028a5c24018a7c2402e8000000000fb6c7f6f3884424039c5931c080f9020f94c083c4045bc3");
+            int codeSections = 0;
+            for (int index = 0; index &lt; sections; ++index)
+            {
+                long header = 20 + (long)index * 40;
+                long size = U32(header + 16);
+                long raw = U32(header + 20);
+                if (!EqualsBytes(header, 8, textName) || size == 0)
+                    continue;
+                bool isPreparation = EqualsBytes(raw, size, preparation);
+                bool isProbe = EqualsBytes(raw, size, probe);
+                if (!isPreparation &amp;&amp; !isProbe)
+                    throw new InvalidDataException("Legacy CPU code generation changed; the DIV BL / flags contract must be reviewed.");
+                ++codeSections;
+                if (isProbe)
+                {
+                    long relocation = U32(header + 24);
+                    ushort relocations = U16(header + 32);
+                    if (relocations != 1)
+                        throw new InvalidDataException("Legacy CPU flag-preparation relocation count changed.");
+                    Range(relocation, 10);
+                    uint site = U32(relocation);
+                    uint targetIndex = U32(relocation + 4);
+                    ushort type = U16(relocation + 8);
+                    string target = SymbolName(targetIndex);
+                    if (site != 21 || type != 20 ||
+                        target != "?prepare_cyrix_division_flags@cpu@kernel@nfs@@YAXXZ")
+                        throw new InvalidDataException("Legacy CPU flag-preparation call changed.");
+                }
+            }
+            if (codeSections != 2)
+                throw new InvalidDataException("Unexpected legacy CPU executable section count.");
+            for (long index = 0; index &lt; symbolCount;)
+            {
+                long record = symbolTable + index * 18;
+                ushort section = U16(record + 12);
+                byte storage = U8(record + 16);
+                byte auxiliary = U8(record + 17);
+                if (storage == 2 &amp;&amp; section == 0)
+                    throw new InvalidDataException("Legacy CPU object acquired an unresolved external.");
+                if (auxiliary &gt; symbolCount - index - 1)
+                    throw new InvalidDataException("Invalid COFF auxiliary-symbol count.");
+                index += auxiliary + 1L;
+            }
+            Log.LogMessage(MessageImportance.Low, "Verified byte-division CPU COFF: {0}", ObjectFile);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            Log.LogError("Legacy CPU COFF verification failed for '{0}': {1}", ObjectFile, exception.Message);
+            return false;
+        }
+    }
+}
+      </Code>
+    </Task>
+  </UsingTask>
+  <UsingTask TaskName="NfsSelectCompileInputs" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)CompileSelection.cs" />
+    </Task>
+  </UsingTask>
+  <UsingTask TaskName="NfsLocateClang" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <Task>
+      <Code Type="Class" Language="cs" Source="$(MSBuildThisFileDirectory)CompilerDiscovery.cs" />
+    </Task>
+  </UsingTask>
+  <PropertyGroup>
+    <BeforeBuildGenerateSourcesTargets>NfsPrepareCompilerPhase;$(BeforeBuildGenerateSourcesTargets)</BeforeBuildGenerateSourcesTargets>
+    <BeforeClCompileTargets>NfsPrepareCompilerPhase;$(BeforeClCompileTargets)</BeforeClCompileTargets>
+    <CLToolExe Condition="'$(NfsCompilerPhase)'=='Clang'">clang-cl.exe</CLToolExe>
+  </PropertyGroup>
+  <Target Name="NfsPrepareCompilerPhase" BeforeTargets="SelectClCompile" Condition="'$(DesignTimeBuild)'!='true'">
+    <Error Condition="'$(Platform)'!='Win32'" Text="NFSHP2 requires the Win32 configuration." />
+    <Error Condition="'$(Configuration)'!='Debug' and '$(Configuration)'!='Release'" Text="Select Debug or Release for this project." />
+    <NfsSelectCompileInputs Sources="@(ClCompile)" CompilerPhase="$(NfsCompilerPhase)" ProjectDirectory="$(NfsRoot)" SelectedFiles="$(SelectedFiles)">
+      <Output TaskParameter="ActiveSources" ItemName="_NfsActiveCompile" />
+      <Output TaskParameter="ClangRequested" PropertyName="NfsClangRequested" />
+      <Output TaskParameter="CpuSelected" PropertyName="NfsCpuSelected" />
+    </NfsSelectCompileInputs>
+    <ItemGroup>
+      <ClCompile Remove="@(ClCompile)" />
+      <ClCompile Include="@(_NfsActiveCompile)" />
+      <ResourceCompile Remove="@(ResourceCompile)" Condition="'$(NfsCompilerPhase)'=='Clang'" />
+      <CustomBuild Remove="@(CustomBuild)" Condition="'$(NfsCompilerPhase)'=='Clang'" />
+      <Object Remove="@(Object)" Condition="'$(NfsCompilerPhase)'=='Clang'" />
+    </ItemGroup>
+    <NfsResolveBuildWorkers Requested="$(NfsBuildJobs)">
+      <Output TaskParameter="Workers" PropertyName="NfsResolvedBuildJobs" />
+    </NfsResolveBuildWorkers>
+    <PropertyGroup>
+      <MultiProcMaxCount>$(NfsResolvedBuildJobs)</MultiProcMaxCount>
+      <CL_MPCount>$(NfsResolvedBuildJobs)</CL_MPCount>
+      <UseMultiToolTask>true</UseMultiToolTask>
+      <EnforceProcessCountAcrossBuilds>true</EnforceProcessCountAcrossBuilds>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntDir);$(TLogLocation)" />
+    <NfsLocateClang Condition="'$(NfsCompilerPhase)'=='Clang' and '@(ClCompile)'!=''" ProjectDirectory="$(NfsRoot)" RecordDirectory="$(NfsClangObjectDirectory)" VisualCppDirectory="$(VCInstallDir)">
+      <Output TaskParameter="CompilerDirectory" PropertyName="CLToolPath" />
+      <Output TaskParameter="CompilerArchitecture" PropertyName="CLToolArchitecture" />
+      <Output TaskParameter="CompilerSignature" PropertyName="NfsCompilerSignature" />
+      <Output TaskParameter="CompilerFile" ItemName="_NfsCompilerFile" />
+      <Output TaskParameter="CompilerChanged" PropertyName="NfsCompilerChanged" />
+    </NfsLocateClang>
+    <RemoveDir Directories="$(NfsClangObjectDirectory)" Condition="'$(NfsCompilerPhase)'=='Clang' and '$(NfsCompilerChanged)'=='true'" />
+    <MakeDir Directories="$(NfsClangObjectDirectory);$(TLogLocation)" Condition="'$(NfsCompilerPhase)'=='Clang' and '@(ClCompile)'!=''" />
+    <WriteLinesToFile File="$(NfsClangObjectDirectory)compiler.path" Lines="@(_NfsCompilerFile)" Overwrite="true" WriteOnlyWhenDifferent="true" Condition="'$(NfsCompilerPhase)'=='Clang' and '@(ClCompile)'!=''" />
+    <WriteLinesToFile File="$(NfsClangObjectDirectory)compiler.signature" Lines="$(NfsCompilerSignature)" Overwrite="true" WriteOnlyWhenDifferent="true" Condition="'$(NfsCompilerPhase)'=='Clang' and '@(ClCompile)'!=''" />
+    <MSBuild Condition="'$(NfsCompilerPhase)'=='MSVC' and '$(NfsClangRequested)'=='true'" Projects="$(MSBuildProjectFullPath)" Targets="BuildGenerateSources;BuildCompile" Properties="Configuration=$(Configuration);Platform=$(Platform);NfsCompilerPhase=Clang;BuildType=Build;BuildProjectReferences=false" BuildInParallel="false" />
+  </Target>
+  <Target Name="NfsPrepareImportDirectory" BeforeTargets="CustomBuild" Condition="'$(NfsCompilerPhase)'=='MSVC'">
+    <MakeDir Directories="$(IntDir)imports" />
+    <ItemGroup>
+      <FileWrites Include="$(IntDir)imports\nfshp2_dinput.exp;$(IntDir)imports\nfshp2_d3d8.exp;$(IntDir)imports\nfshp2_msvcrt.exp" />
+    </ItemGroup>
+  </Target>
+  <Target Name="NfsCheckCpuObject" AfterTargets="ClCompile" Condition="'$(NfsCompilerPhase)'=='Clang' and '$(NfsCpuSelected)'=='true' and '$(DesignTimeBuild)'!='true'">
+    <NfsVerifyLegacyCpu ObjectFile="$(NfsClangObjectDirectory)cpu_legacy_cyrix.obj" />
+  </Target>
+  <Target Name="NfsCleanCompilerOutputs" AfterTargets="Clean" Condition="'$(NfsCompilerPhase)'=='MSVC'">
+    <RemoveDir Directories="$(NfsMsvcObjectDirectory);$(NfsClangObjectDirectory)" />
+  </Target>
+</Project>

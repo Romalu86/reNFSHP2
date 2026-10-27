@@ -1,0 +1,11 @@
+License notices
+
+Rights to the original Need for Speed: Hot Pursuit 2 game code, assets and
+trademarks remain with their respective owners. No project-wide license
+grant is included in the source materials.
+
+Third-party licenses:
+
+- Direct3D 8 headers: LGPL 2.1 or later; third_party/d3d8/COPYING.LIB.
+- OTools: MIT; third_party/otools/LICENSE.
+- vgmstream: see third_party/vgmstream/COPYING.

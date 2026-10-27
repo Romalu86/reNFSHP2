@@ -1,0 +1,21 @@
+// EAGL messages.
+static constexpr char loader_unresolved_symbol_message[]="ERROR: DynamicLoader::Resolve - Failed to resolve undefined relocation symbol %s.\nPossible causes:\n    - You forgot to add the symbol to the global symbol pool before loading this ELF.\n    - You forgot to provide an address if using an address callback function.\n    - You forgot to load another ELF that contains the symbol before loading this ELF.\n      ie. forgot to load eaglrm.o before a model ELF.\n    - There is a problem with the ELF file\n";
+static constexpr char loader_unknown_symbol_type_message[]="dlopen: Relocation to a symbol type I don't understand! (symbol %s type %d)\n";
+static constexpr char loader_jump_out_of_range_message[]="dlopen: Result of patching jmp instruction is outside of range of possible jump. (%x vs. %x) Aborting.\n";
+static constexpr char loader_gp_relative_relocation_message[]="dlopen: Cannot deal with GP relative relocations. Aborting\n";
+static constexpr char loader_mips_literal_relocation_message[]="dlopen: Cannot deal with MIPS_LITERAL relocation yet\n";
+static constexpr char loader_mips_got_relocation_message[]="dlopen: Cannot deal with MIPS_GOT16 relocation yet\n";
+static constexpr char loader_unsupported_relocation_message[]="dlopen: Cannot deal with relocation type %d yet\n";
+static constexpr char loader_rela_section_message[]="dlopen: non empty SHT_RELA section seen. Not supported.\n";
+static constexpr char loader_hash_section_message[]="dlopen: SHT_HASH section seen. Not supported.\n";
+static constexpr char loader_unknown_section_message[]="Unknown section type %d (section %d). Aborting dynamic loading.\n";
+static constexpr char loader_nobits_data_message[]="dlopen: SHT_NOBITS section with data seen. Not supported.\n";
+static constexpr char loader_shlib_section_message[]="dlopen: SHT_SHLIB section seen. Not supported.\n";
+static constexpr char loader_dynsym_section_message[]="dlopen: SHT_DYNSYM section seen. Not supported.\n";
+static constexpr char loader_missing_symbol_table_message[]="dlopen: Failed to find a symbol table. Aborting\n";
+static constexpr char loader_invalid_symbol_chain_message[]="dlsym: Internal error. Bad j value %d (chain size %d)!\n";
+static constexpr char loader_invalid_address_chain_message[]="DynamicLoader::GetAddr() -- INTERNAL ERROR: Bad i value %d (chain size %d)!\n";
+static constexpr char loader_destructor_entry_allocation_label[]="EAGL::DynamicLoader::RuntimeAllocDestructorEntry new";
+static constexpr char loader_hash_pointer_allocation_label[]="EAGL::HashPointer new";
+static constexpr char loader_dynamic_symbols_label[]="EAGL::dynamic symbols";
+static constexpr char loader_destructor_list_label[]="EAGL::dynamic destructor list";

@@ -1,0 +1,40 @@
+
+const gui::engine::pending::FlagDefinition type_spin_bindings[] = {
+    {"kGameSetupNull", 0u, 0u},
+    {"kGameMode", 0u, 1u},
+    {"kRaceType", 0u, 2u},
+    {"kRaceTime", 0u, 3u},
+    {"kTrack", 0u, 5u},
+    {"kDirection", 0u, 6u},
+    {"kNumLaps", 0u, 7u},
+    {"kNumRaces", 0u, 8u},
+    {"kCops", 0u, 11u},
+    {"kTraffic", 0u, 12u},
+    {"kNumPlayers", 0u, 13u},
+    {"kNumOpps", 0u, 14u},
+    {"kOppCarClass", 0u, 15u},
+    {"kOppSkill", 0u, 16u},
+    {"kConnectionType", 0u, 4u},
+    {"kTrack", 0u, 5u},
+    {"kOptionsView", 0u, 28u},
+    {"kDriverStatsList", 0u, 61u},
+    {"kSingleChallengeView", 0u, 60u},
+    {"kMPBrowserView", 0u, 62u},
+    {nullptr, 0u, 0u},
+};
+const OptionPage option_pages[] = {
+    {"Controls", "ControllerScreen", 1065u},
+    {"Audio", "AudioScreen", 1067u},
+    {"Graphics", "GraphicsScreen", 1552u},
+    {"HUD", "GWidget", 1073u},
+    {"GameOpts", "GWidget", 1072u},
+    {"DriverProfile", "DriverProfileScreen", 1068u},
+    {"Credits", "GWidget", 1069u},
+};
+ChallengePage challenge_pages[] = {
+    {"SingleRace", "SingleRaceScreen", 1250u, 0u, 1u, 7u, 43u, 0u, 2u, 0u, 0u, 0u, 0u},
+    {"LapKnockout", "LapKnockoutScreen", 1251u, 0u, 1u, 7u, 43u, 0u, 2u, 0u, 0u, 0u, 0u},
+    {"Tournament", "TournamentScreen", 1252u, 0u, 1u, 7u, 43u, 0u, 2u, 0u, 0u, 0u, 0u},
+    {"QuotaChallenge", "QuotaChallengeScreen", 1253u, 0u, 0u, 7u, 43u, 0u, 2u, 0u, 0u, 0u, 0u},
+    {"FreeRun", "FreeRunScreen", 1255u, 0u, 0u, 0u, 43u, 0u, 2u, 0u, 0u, 0u, 0u},
+};
